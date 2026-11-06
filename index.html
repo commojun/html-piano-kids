@@ -49,6 +49,29 @@
     #voice { position: fixed; top: 12px; right: 12px; width: 56px; height: 56px; border: none; border-radius: 50%;
       background: rgba(255,255,255,.7); font-size: 28px; padding: 0; touch-action: none; }
     #voice.off { opacity: .4; }
+    /* きょくの アシスト: ボタンと「つぎに おす けんばん」の しるし (点滅は しない。ゆっくり ふくらむ だけ) */
+    #song { position: fixed; top: 12px; left: 50%; transform: translateX(-50%); height: 56px; padding: 0 18px 0 12px;
+      border: none; border-radius: 28px; background: rgba(255,255,255,.75); display: flex; align-items: center; gap: 6px;
+      font-size: 20px; font-weight: bold; color: #8a6d00; touch-action: none; box-shadow: 0 3px 0 rgba(0,0,0,.08); z-index: 6; }
+    #song .st { font-size: 30px; line-height: 1; }
+    #song.on { background: #fff3bf; box-shadow: 0 0 0 4px #ffd43b, 0 3px 0 rgba(0,0,0,.08); }
+    #progress { position: fixed; top: 76px; left: 50%; transform: translateX(-50%); display: none; gap: 3px; z-index: 6;
+      max-width: calc(100% - 140px); flex-wrap: wrap; justify-content: center; pointer-events: none; }
+    body.assist #progress { display: flex; }
+    #progress i { width: 10px; height: 10px; border-radius: 50%; background: rgba(0,0,0,.12); }
+    #progress i.done { background: #ffd43b; }
+    #progress i.gap { width: 6px; background: none; }
+    .key.next { background: linear-gradient(#fff6c8 0 85%, #f6e6a6); box-shadow: inset 0 0 0 5px #ffd43b, inset 0 -6px 0 #e3ddcf, 0 3px 0 #9c9586; }
+    .key.next .em { animation: nextbob 1.4s ease-in-out infinite; }
+    @keyframes nextbob { 50% { transform: scale(1.18); } }
+    #marker { position: fixed; z-index: 4; pointer-events: none; font-size: min(10vh, 9vw); line-height: 1; display: none;
+      transform: translate(-50%, -100%); transition: left .18s ease-out; animation: markbob 1.4s ease-in-out infinite; }
+    body.assist #marker { display: block; }
+    @keyframes markbob { 50% { margin-top: -10px; } }
+    .cheer { position: fixed; left: 50%; top: 14%; transform: translate(-50%, -50%); z-index: 7; pointer-events: none;
+      font-size: min(22vh, 20vw); line-height: 1; animation: cheer 2.2s ease-out forwards; }
+    @keyframes cheer { 0% { transform: translate(-50%, -50%) scale(.3); opacity: 0; } 20% { transform: translate(-50%, -50%) scale(1.15); opacity: 1; }
+      80% { opacity: 1; } 100% { transform: translate(-50%, -80%) scale(1); opacity: 0; } }
     /* 鍵盤の外を触ったときに ふわっと浮かぶ 小さな音符 */
     .puff { position: fixed; pointer-events: none; z-index: 5; font-size: 30px; line-height: 1; color: var(--c);
       animation: puff 1s ease-out forwards; }
@@ -60,6 +83,9 @@
   <div id="stage"></div>
   <div id="piano"><div id="felt"></div><div id="keys"></div></div>
   <button id="voice" aria-label="こえ">🔇</button>
+  <button id="song" aria-label="きらきらぼし"><span class="st">⭐</span>きらきらぼし</button>
+  <div id="progress"></div>
+  <div id="marker">⭐</div>
   <script src="common/kit.js"></script>
   <script>
     // どれみぴあの: ド〜高いド の白鍵 8 本。江口メソッドの初歩の「ことばで覚えるドレミ」
@@ -93,12 +119,14 @@
     });
     // 黒鍵 (ラベルなし)。[左どなりの白鍵の番号, 半音, 本物どおりの ずれ (黒鍵の幅に対する割合)]
     // ド#・ファ# は少し左、レ#・ラ# は少し右、ソ# はまんなか。ミ-ファ、シ-ド の間には ない
-    const BLACKS = [[0, 1, -0.15], [1, 3, 0.15], [3, 6, -0.18], [4, 8, 0], [5, 10, 0.18]];
+    // さいごの [7, 13] は 右はしの ドの 上の ド# (本物の ピアノなら ある)。右はしで 切れて 左の 6 割だけ チラッと 見える。触れば 鳴る
+    const BLACKS = [[0, 1, -0.15], [1, 3, 0.15], [3, 6, -0.18], [4, 8, 0], [5, 10, 0.18], [7, 13, -0.15]];
     BLACKS.forEach(([w, semi, off], j) => {
       const b = document.createElement("div");
       b.className = "black";
       b.dataset.i = NOTES.length + j;
       b.style.left = `calc(100% / 8 * ${w + 1} + 100% / 8 * .58 * ${off})`;
+      if (w === 7) b.style.clipPath = "inset(0 35% -10px 0)";   // 鍵盤の 右はし (= 黒鍵の まんなか + 0.15 幅) から 先は 見せない
       keys.appendChild(b);
       els.push(b);
     });
@@ -199,6 +227,7 @@
       stage.appendChild(p);
       setTimeout(() => p.remove(), 1100);
       if (mode !== "off") sing(i);
+      assistStep(i);
     };
     const release = (i) => els[i] && els[i].classList.remove("on");
     const keyAt = (x, y) => {
@@ -232,9 +261,70 @@
     addEventListener("pointerup", up);
     addEventListener("pointercancel", up);
 
+    // ---- きょくの アシスト: 「つぎに おす けんばん」を ひからせる (タイミングは 問わない。伴奏も なし) ----
+    // 白鍵の 番号: ど0 れ1 み2 ふぁ3 そ4 ら5 し6 ど7。行の 区切りは 進み具合の 点の すきまに なる
+    const SONGS = {
+      kirakira: [[0, 0, 4, 4, 5, 5, 4], [3, 3, 2, 2, 1, 1, 0], [4, 4, 3, 3, 2, 2, 1], [4, 4, 3, 3, 2, 2, 1], [0, 0, 4, 4, 5, 5, 4], [3, 3, 2, 2, 1, 1, 0]],
+    };
+    const songBtn = document.getElementById("song");
+    const progressEl = document.getElementById("progress");
+    const marker = document.getElementById("marker");
+    let seq = null, pos = 0, dots = [];
+    const showNext = () => {
+      els.forEach((k) => k.classList.remove("next"));
+      if (!seq) return;
+      const k = els[seq[pos]];
+      k.classList.add("next");
+      const r = k.getBoundingClientRect(), pr = document.getElementById("piano").getBoundingClientRect();
+      marker.style.left = r.left + r.width / 2 + "px";
+      marker.style.top = pr.top - 4 + "px";
+      dots.forEach((d, j) => d.classList.toggle("done", j < pos));
+    };
+    const startAssist = (id) => {
+      const rows = SONGS[id];
+      seq = rows.flat(); pos = 0;
+      progressEl.innerHTML = "";
+      dots = [];
+      rows.forEach((row, r) => {
+        if (r) { const g = document.createElement("i"); g.className = "gap"; progressEl.appendChild(g); }
+        row.forEach(() => { const d = document.createElement("i"); progressEl.appendChild(d); dots.push(d); });
+      });
+      document.body.classList.add("assist");
+      songBtn.classList.add("on");
+      showNext();
+    };
+    const stopAssist = () => {
+      seq = null;
+      document.body.classList.remove("assist");
+      songBtn.classList.remove("on");
+      showNext();
+    };
+    const assistStep = (i) => {
+      if (!seq || i !== seq[pos]) return;   // ちがう けんばんは ふつうに 鳴るだけ (しっぱい に しない)
+      pos++;
+      if (pos < seq.length) { showNext(); return; }
+      // さいごまで ひけた
+      dots.forEach((d) => d.classList.add("done"));
+      const c = document.createElement("div");
+      c.className = "cheer"; c.textContent = "🌟";
+      document.body.appendChild(c);
+      setTimeout(() => c.remove(), 2300);
+      [0, 2, 4, 7].forEach((n, j) => setTimeout(() => Kit.tone(freq(12 + [0, 4, 7, 12][j]), { dur: 0.5, type: "triangle", vol: 0.25 }), 350 + j * 120));
+      setTimeout(() => Kit.say("できたね", { pitch: 1.2 }), 900);
+      seq = null;
+      els.forEach((k) => k.classList.remove("next"));
+      setTimeout(stopAssist, 2300);
+    };
+    songBtn.addEventListener("pointerdown", (e) => {
+      e.stopPropagation();
+      if (seq) stopAssist(); else startAssist("kirakira");
+      Kit.tone(seq ? 784 : 523, { dur: 0.15, type: "triangle", vol: 0.25 });
+    });
+    addEventListener("resize", () => seq && showNext());
+
     // 鍵盤の外 (上の空き・ピアノの枠) を触ったら、小さな音符が ふわっと浮かんで 控えめに ぽろん
     document.addEventListener("pointerdown", (e) => {
-      if (e.target.closest(".kit-home, #voice") || keyAt(e.clientX, e.clientY) >= 0) return;
+      if (e.target.closest(".kit-home, #voice, #song") || keyAt(e.clientX, e.clientY) >= 0) return;
       const f = document.createElement("div");
       f.className = "puff";
       f.textContent = Kit.pick(["♪", "♫", "🎵"]);
